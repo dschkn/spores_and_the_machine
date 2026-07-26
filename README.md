@@ -2,7 +2,7 @@
 
 * A cellular automaton reconstructed and sonified anew in Max/MSP.
 
-![Spores and the machine running in Max/MSP](images/interface.png)
+![Spores and the machine running in Max/MSP](images/interface.webp)
 
 ## About
 
@@ -84,7 +84,7 @@ You can stop the clock and draw cells directly into the matrix.
 - `spores-and-the-machine.maxpat` — the main patch and Presentation Mode interface;
 - `spores-and-the-machine.js` — the automaton, matrix updates, and regional analysis;
 - `spore.voice.maxpat` — a three-layer click synthesizer instantiated once for each territory;
-- `images/interface.png` — the actual Max/MSP screenshot shown above.
+- `images/interface.webp` — the actual Max/MSP screenshot shown above.
 
 ## Scope
 
