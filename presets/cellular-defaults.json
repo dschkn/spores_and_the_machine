@@ -1,0 +1,21 @@
+{
+  "field": {
+    "width": 120,
+    "height": 60,
+    "step_ms": 95,
+    "colonies": 18,
+    "wrap": 1
+  },
+  "rule": {
+    "mode": "colony",
+    "spore_rate": 0.00008,
+    "drift": 0.55,
+    "auto_seed": true
+  },
+  "audio": {
+    "regions": 6,
+    "master": 0.62,
+    "frequency_min_hz": 45,
+    "frequency_max_hz": 12000
+  }
+}
