@@ -1,0 +1,22 @@
+{
+  "field": {
+    "width": 160,
+    "height": 90,
+    "step_ms": 90,
+    "organisms": 6
+  },
+  "biology": {
+    "food_rate": 0.013,
+    "mutation": 0.18,
+    "metabolism": 0.00115,
+    "minimum_area": 55,
+    "division_area": 215,
+    "maximum_organisms": 8
+  },
+  "audio": {
+    "master": 0.45,
+    "voices": 8,
+    "frequency_min_hz": 55,
+    "frequency_max_hz": 12000
+  }
+}
