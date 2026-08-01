@@ -2,31 +2,39 @@ autowatch = 1;
 inlets = 1;
 outlets = 3;
 
-// Advanced organism simulation for Max 8 JavaScript.
+// Optimized contour-based organism simulation for Max 8.
 // outlet 0: RGBA Jitter matrix
 // outlet 1: "voice slot area energy speed roughness x y event"
 // outlet 2: "stats generation organisms food births deaths"
 
 var WIDTH = 160;
 var HEIGHT = 90;
+var FOOD_W = 80;
+var FOOD_H = 45;
+
 var MAX_ORGANISMS = 8;
-var DEFAULT_COUNT = 6;
-var MIN_AREA = 55;
-var DIVIDE_AREA = 215;
+var DEFAULT_COUNT = 5;
+var CONTOUR_POINTS = 28;
 
 var generation = 0;
 var nextId = 1;
 var totalBirths = 0;
 var totalDeaths = 0;
-var foodRate = 0.013;
-var mutationAmount = 0.18;
-var diffusion = 0.18;
-var metabolism = 0.00115;
 
-var grid = [];
+var foodRate = 0.010;
+var mutationAmount = 0.12;
+var diffusion = 0.14;
+var metabolism = 0.0010;
+
+var renderEvery = 2;
+var outputEvery = 2;
+var diffusionEvery = 4;
+var qualityName = "medium";
+
 var food = [];
 var foodBuffer = [];
 var organisms = [];
+
 var frame = new JitterMatrix(4, "char", WIDTH, HEIGHT);
 frame.name = "spores_organisms_frame";
 
@@ -35,78 +43,167 @@ var palette = [
     [172, 128, 255], [80, 224, 223], [232, 105, 92], [168, 220, 92]
 ];
 
-function makeArray(value) {
-    var a = new Array(WIDTH * HEIGHT);
+function clamp(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
+}
+
+function randInt(n) {
+    return Math.floor(Math.random() * n);
+}
+
+function sqr(v) {
+    return v * v;
+}
+
+function distance2(x1, y1, x2, y2) {
+    return sqr(x1 - x2) + sqr(y1 - y2);
+}
+
+function makeArray(length, value) {
+    var a = new Array(length);
     var i;
-    for (i = 0; i < a.length; i++) a[i] = value;
+    for (i = 0; i < length; i++) a[i] = value;
     return a;
 }
 
-function indexOf(x, y) { return y * WIDTH + x; }
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-function randInt(n) { return Math.floor(Math.random() * n); }
-function sqr(v) { return v * v; }
-function distance2(x1, y1, x2, y2) { return sqr(x1 - x2) + sqr(y1 - y2); }
+function foodIndex(x, y) {
+    return y * FOOD_W + x;
+}
 
-function loadbang() { reset(DEFAULT_COUNT); }
+function loadbang() {
+    reset(DEFAULT_COUNT);
+}
+
+function quality(name) {
+    var value = String(name).toLowerCase();
+
+    if (value === "low") {
+        qualityName = "low";
+        CONTOUR_POINTS = 20;
+        renderEvery = 3;
+        outputEvery = 3;
+        diffusionEvery = 6;
+    } else if (value === "high") {
+        qualityName = "high";
+        CONTOUR_POINTS = 36;
+        renderEvery = 1;
+        outputEvery = 1;
+        diffusionEvery = 3;
+    } else {
+        qualityName = "medium";
+        CONTOUR_POINTS = 28;
+        renderEvery = 2;
+        outputEvery = 2;
+        diffusionEvery = 4;
+    }
+
+    rebuildContours();
+    render();
+    outputState(true);
+}
+
+function rebuildContours() {
+    var i;
+    for (i = 0; i < organisms.length; i++) {
+        organisms[i].radii = makeInitialRadii(
+            organisms[i].baseRadius,
+            organisms[i].shapePhase,
+            organisms[i].id
+        );
+    }
+}
+
+function dimensions(w, h) {
+    WIDTH = clamp(Math.floor(w), 96, 200);
+    HEIGHT = clamp(Math.floor(h), 54, 112);
+
+    FOOD_W = Math.max(48, Math.floor(WIDTH * 0.5));
+    FOOD_H = Math.max(27, Math.floor(HEIGHT * 0.5));
+
+    frame = new JitterMatrix(4, "char", WIDTH, HEIGHT);
+    frame.name = "spores_organisms_frame";
+
+    reset(Math.min(DEFAULT_COUNT, MAX_ORGANISMS));
+}
+
+function organismcount(v) {
+    DEFAULT_COUNT = clamp(Math.floor(v), 1, MAX_ORGANISMS);
+}
+
+function foodrate(v) {
+    foodRate = clamp(parseFloat(v), 0.0, 0.08);
+}
+
+function mutation(v) {
+    mutationAmount = clamp(parseFloat(v), 0.0, 1.0);
+}
+
+function metabolic(v) {
+    metabolism = clamp(parseFloat(v), 0.0001, 0.008);
+}
+
+function addfood(amount) {
+    seedFood(arguments.length ? Math.floor(amount) : 10);
+    render();
+}
 
 function reset(count) {
     count = arguments.length ? Math.floor(count) : DEFAULT_COUNT;
     count = clamp(count, 1, MAX_ORGANISMS);
+
     generation = 0;
     nextId = 1;
     totalBirths = 0;
     totalDeaths = 0;
-    grid = makeArray(0);
-    food = makeArray(0.0);
-    foodBuffer = makeArray(0.0);
+
+    food = makeArray(FOOD_W * FOOD_H, 0.0);
+    foodBuffer = makeArray(FOOD_W * FOOD_H, 0.0);
     organisms = [];
 
-    seedFood(44);
+    seedFood(24);
 
     var cols = Math.ceil(Math.sqrt(count));
     var rows = Math.ceil(count / cols);
     var i;
+
     for (i = 0; i < count; i++) {
         var gx = i % cols;
         var gy = Math.floor(i / cols);
-        var cx = Math.floor((gx + 0.5) * WIDTH / cols + (Math.random() - 0.5) * 10);
-        var cy = Math.floor((gy + 0.5) * HEIGHT / rows + (Math.random() - 0.5) * 8);
-        spawnOrganism(cx, cy, 5 + randInt(3), 0.7 + Math.random() * 0.2);
+
+        var cx = (gx + 0.5) * WIDTH / cols;
+        var cy = (gy + 0.5) * HEIGHT / rows;
+
+        cx += (Math.random() - 0.5) * 10;
+        cy += (Math.random() - 0.5) * 8;
+
+        spawnOrganism(cx, cy, 7.0 + Math.random() * 1.8, 0.72 + Math.random() * 0.18);
     }
+
     render();
-    outputState();
+    outputState(true);
 }
-
-function dimensions(w, h) {
-    WIDTH = clamp(Math.floor(w), 80, 240);
-    HEIGHT = clamp(Math.floor(h), 45, 135);
-    frame = new JitterMatrix(4, "char", WIDTH, HEIGHT);
-    frame.name = "spores_organisms_frame";
-    reset(Math.min(DEFAULT_COUNT, MAX_ORGANISMS));
-}
-
-function organismcount(v) { DEFAULT_COUNT = clamp(Math.floor(v), 1, MAX_ORGANISMS); }
-function foodrate(v) { foodRate = clamp(parseFloat(v), 0.0, 0.08); }
-function mutation(v) { mutationAmount = clamp(parseFloat(v), 0.0, 1.0); }
-function metabolic(v) { metabolism = clamp(parseFloat(v), 0.0001, 0.008); }
-function addfood(amount) { seedFood(arguments.length ? Math.floor(amount) : 12); render(); }
 
 function seedFood(clusters) {
-    var c, dx, dy;
+    var c;
+    var dx;
+    var dy;
+
     for (c = 0; c < clusters; c++) {
-        var cx = 4 + randInt(Math.max(1, WIDTH - 8));
-        var cy = 4 + randInt(Math.max(1, HEIGHT - 8));
-        var radius = 2 + randInt(6);
+        var cx = 3 + randInt(Math.max(1, FOOD_W - 6));
+        var cy = 3 + randInt(Math.max(1, FOOD_H - 6));
+        var radius = 2 + randInt(4);
         var strength = 0.45 + Math.random() * 0.55;
+
         for (dy = -radius; dy <= radius; dy++) {
             for (dx = -radius; dx <= radius; dx++) {
                 var x = cx + dx;
                 var y = cy + dy;
-                if (x < 1 || y < 1 || x >= WIDTH - 1 || y >= HEIGHT - 1) continue;
+
+                if (x < 1 || y < 1 || x >= FOOD_W - 1 || y >= FOOD_H - 1) continue;
+
                 var d = Math.sqrt(dx * dx + dy * dy) / Math.max(1, radius);
                 if (d <= 1.0) {
-                    var idx = indexOf(x, y);
+                    var idx = foodIndex(x, y);
                     food[idx] = clamp(food[idx] + strength * (1.0 - d), 0, 1);
                 }
             }
@@ -114,275 +211,401 @@ function seedFood(clusters) {
     }
 }
 
-function spawnOrganism(cx, cy, radius, energy) {
-    if (organisms.length >= MAX_ORGANISMS) return null;
-    var id = nextId++;
-    var o = {
-        id: id,
-        slot: freeSlot(),
-        cells: [],
-        cx: cx,
-        cy: cy,
-        prevCx: cx,
-        prevCy: cy,
-        polarityX: Math.random() * 2 - 1,
-        polarityY: Math.random() * 2 - 1,
-        energy: clamp(energy, 0, 1),
-        age: 0,
-        roughness: 0,
-        event: 0,
-        targetArea: 125 + randInt(35),
-        color: palette[(id - 1) % palette.length]
-    };
-
-    var x, y;
-    for (y = cy - radius - 3; y <= cy + radius + 3; y++) {
-        for (x = cx - radius - 3; x <= cx + radius + 3; x++) {
-            if (x < 2 || y < 2 || x >= WIDTH - 2 || y >= HEIGHT - 2) continue;
-            var angle = Math.atan2(y - cy, x - cx);
-            var wobble = Math.sin(angle * 3 + id) * 1.3 + (Math.random() - 0.5) * 2.0;
-            if (distance2(x, y, cx, cy) <= sqr(radius + wobble)) addCell(o, x, y);
-        }
-    }
-    organisms.push(o);
-    updateStats(o);
-    return o;
-}
-
 function freeSlot() {
     var used = [];
     var i;
+
     for (i = 0; i < organisms.length; i++) used[organisms[i].slot] = 1;
-    for (i = 1; i <= MAX_ORGANISMS; i++) if (!used[i]) return i;
+    for (i = 1; i <= MAX_ORGANISMS; i++) {
+        if (!used[i]) return i;
+    }
+
     return 1;
 }
 
-function addCell(o, x, y) {
-    var idx = indexOf(x, y);
-    if (grid[idx] !== 0) return false;
-    grid[idx] = o.id;
-    o.cells.push([x, y]);
-    return true;
-}
-
-function removeCell(o, cellIndex) {
-    if (cellIndex < 0 || cellIndex >= o.cells.length) return false;
-    var c = o.cells[cellIndex];
-    grid[indexOf(c[0], c[1])] = 0;
-    o.cells.splice(cellIndex, 1);
-    return true;
-}
-
-function sameNeighbours(o, x, y) {
-    var n = 0;
-    var dx, dy, nx, ny;
-    for (dy = -1; dy <= 1; dy++) {
-        for (dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            nx = x + dx;
-            ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= WIDTH || ny >= HEIGHT) continue;
-            if (grid[indexOf(nx, ny)] === o.id) n++;
-        }
-    }
-    return n;
-}
-
-function isBoundary(o, x, y) { return sameNeighbours(o, x, y) < 8; }
-
-function updateStats(o) {
-    var sx = 0;
-    var sy = 0;
-    var boundary = 0;
+function makeInitialRadii(radius, phase, id) {
+    var radii = new Array(CONTOUR_POINTS);
     var i;
-    for (i = 0; i < o.cells.length; i++) {
-        sx += o.cells[i][0];
-        sy += o.cells[i][1];
-        if (isBoundary(o, o.cells[i][0], o.cells[i][1])) boundary++;
+
+    for (i = 0; i < CONTOUR_POINTS; i++) {
+        var angle = Math.PI * 2 * i / CONTOUR_POINTS;
+        var harmonic =
+            Math.sin(angle * 3 + phase) * 0.055 +
+            Math.sin(angle * 5 + phase * 0.7 + id) * 0.035;
+
+        radii[i] = radius * (1.0 + harmonic);
     }
-    o.prevCx = o.cx;
-    o.prevCy = o.cy;
-    if (o.cells.length) {
-        o.cx = sx / o.cells.length;
-        o.cy = sy / o.cells.length;
-    }
-    o.roughness = o.cells.length ? boundary / o.cells.length : 0;
+
+    return radii;
 }
 
-function localFood(x, y, radius) {
-    var sum = 0;
-    var count = 0;
-    var dx, dy;
-    for (dy = -radius; dy <= radius; dy++) {
-        for (dx = -radius; dx <= radius; dx++) {
-            var nx = clamp(Math.round(x + dx), 0, WIDTH - 1);
-            var ny = clamp(Math.round(y + dy), 0, HEIGHT - 1);
-            sum += food[indexOf(nx, ny)];
-            count++;
-        }
-    }
-    return count ? sum / count : 0;
+function spawnOrganism(cx, cy, radius, energy) {
+    if (organisms.length >= MAX_ORGANISMS) return null;
+
+    var id = nextId++;
+    var angle = Math.random() * Math.PI * 2;
+    var phase = Math.random() * Math.PI * 2;
+
+    var o = {
+        id: id,
+        slot: freeSlot(),
+
+        cx: clamp(cx, radius + 3, WIDTH - radius - 3),
+        cy: clamp(cy, radius + 3, HEIGHT - radius - 3),
+        prevCx: cx,
+        prevCy: cy,
+
+        polarityX: Math.cos(angle),
+        polarityY: Math.sin(angle),
+        velocityX: 0,
+        velocityY: 0,
+
+        energy: clamp(energy, 0, 1),
+        age: 0,
+        event: 0,
+
+        baseRadius: radius,
+        targetRadius: radius,
+        radii: makeInitialRadii(radius, phase, id),
+        shapePhase: phase,
+        shapePhase2: Math.random() * Math.PI * 2,
+        roughness: 0,
+        area: Math.PI * radius * radius,
+
+        nucleusX: cx,
+        nucleusY: cy,
+        nucleusVX: 0,
+        nucleusVY: 0,
+
+        color: palette[(id - 1) % palette.length]
+    };
+
+    organisms.push(o);
+    return o;
+}
+
+function foodAtWorld(x, y) {
+    var fx = clamp(Math.floor(x * FOOD_W / WIDTH), 0, FOOD_W - 1);
+    var fy = clamp(Math.floor(y * FOOD_H / HEIGHT), 0, FOOD_H - 1);
+    return food[foodIndex(fx, fy)];
+}
+
+function consumeFoodAtWorld(x, y, amount) {
+    var fx = clamp(Math.floor(x * FOOD_W / WIDTH), 0, FOOD_W - 1);
+    var fy = clamp(Math.floor(y * FOOD_H / HEIGHT), 0, FOOD_H - 1);
+    var idx = foodIndex(fx, fy);
+
+    var bite = Math.min(food[idx], amount);
+    food[idx] -= bite;
+    return bite;
 }
 
 function updatePolarity(o) {
-    var step = 8;
-    var dirs = [[1,0],[-1,0],[0,1],[0,-1],[0.707,0.707],[-0.707,0.707],[0.707,-0.707],[-0.707,-0.707]];
-    var best = -1;
-    var bx = o.polarityX;
-    var by = o.polarityY;
+    var dirs = [
+        [1, 0], [-1, 0], [0, 1], [0, -1],
+        [0.707, 0.707], [-0.707, 0.707],
+        [0.707, -0.707], [-0.707, -0.707]
+    ];
+
+    var sampleDistance = o.baseRadius + 7;
+    var bestScore = -999;
+    var bestX = o.polarityX;
+    var bestY = o.polarityY;
     var i;
+
     for (i = 0; i < dirs.length; i++) {
-        var score = localFood(o.cx + dirs[i][0] * step, o.cy + dirs[i][1] * step, 2);
-        score += Math.random() * mutationAmount * 0.16;
-        score += Math.max(0, dirs[i][0] * o.polarityX + dirs[i][1] * o.polarityY) * 0.08;
-        if (score > best) {
-            best = score;
-            bx = dirs[i][0];
-            by = dirs[i][1];
+        var dx = dirs[i][0];
+        var dy = dirs[i][1];
+
+        var score = foodAtWorld(
+            o.cx + dx * sampleDistance,
+            o.cy + dy * sampleDistance
+        );
+
+        score += Math.max(0, dx * o.polarityX + dy * o.polarityY) * 0.08;
+        score += Math.random() * mutationAmount * 0.12;
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestX = dx;
+            bestY = dy;
         }
     }
-    o.polarityX = o.polarityX * 0.76 + bx * 0.24 + (Math.random() - 0.5) * mutationAmount * 0.12;
-    o.polarityY = o.polarityY * 0.76 + by * 0.24 + (Math.random() - 0.5) * mutationAmount * 0.12;
+
+    o.polarityX =
+        o.polarityX * 0.82 +
+        bestX * 0.18 +
+        (Math.random() - 0.5) * mutationAmount * 0.08;
+
+    o.polarityY =
+        o.polarityY * 0.82 +
+        bestY * 0.18 +
+        (Math.random() - 0.5) * mutationAmount * 0.08;
+
     var mag = Math.sqrt(o.polarityX * o.polarityX + o.polarityY * o.polarityY) || 1;
     o.polarityX /= mag;
     o.polarityY /= mag;
 }
 
-function chooseBoundary(o, front) {
-    var candidates = [];
-    var weights = [];
-    var total = 0;
-    var i;
-    for (i = 0; i < o.cells.length; i++) {
-        var c = o.cells[i];
-        if (!isBoundary(o, c[0], c[1])) continue;
-        var vx = c[0] - o.cx;
-        var vy = c[1] - o.cy;
-        var dot = vx * o.polarityX + vy * o.polarityY;
-        var ok = front ? dot >= -2.0 : dot <= 2.0;
-        if (!ok) continue;
-        var w = 0.25 + (front ? Math.max(0, dot) : Math.max(0, -dot));
-        candidates.push(i);
-        weights.push(w);
-        total += w;
-    }
-    if (!candidates.length) return -1;
-    var pick = Math.random() * total;
-    for (i = 0; i < candidates.length; i++) {
-        pick -= weights[i];
-        if (pick <= 0) return candidates[i];
-    }
-    return candidates[candidates.length - 1];
-}
-
 function consumeFood(o) {
     var consumed = 0;
-    var samples = Math.min(o.cells.length, 90);
+    var samples = 8;
     var i;
+
+    consumed += consumeFoodAtWorld(o.cx, o.cy, 0.018);
+
     for (i = 0; i < samples; i++) {
-        var c = o.cells[randInt(o.cells.length)];
-        var idx = indexOf(c[0], c[1]);
-        if (food[idx] > 0.008) {
-            var bite = Math.min(food[idx], 0.014 + o.energy * 0.008);
-            food[idx] -= bite;
-            consumed += bite;
-        }
+        var angle = Math.PI * 2 * i / samples;
+        var radiusIndex = Math.floor(i * CONTOUR_POINTS / samples);
+        var radius = o.radii[radiusIndex];
+
+        consumed += consumeFoodAtWorld(
+            o.cx + Math.cos(angle) * radius * 0.88,
+            o.cy + Math.sin(angle) * radius * 0.88,
+            0.008
+        );
     }
+
     if (consumed > 0.018) o.event = 1;
-    o.energy = clamp(o.energy + consumed * 0.34, 0, 1);
-    o.targetArea = clamp(105 + o.energy * 145, 90, 250);
+
+    o.energy = clamp(o.energy + consumed * 0.62, 0, 1);
+    o.targetRadius = clamp(5.8 + o.energy * 5.5, 5.8, 11.3);
 }
 
-function connectedEnough(o, candidateIndex) {
-    var c = o.cells[candidateIndex];
-    return sameNeighbours(o, c[0], c[1]) >= 3;
+function repelOrganisms() {
+    var i;
+    var j;
+
+    for (i = 0; i < organisms.length; i++) {
+        for (j = i + 1; j < organisms.length; j++) {
+            var a = organisms[i];
+            var b = organisms[j];
+
+            var dx = b.cx - a.cx;
+            var dy = b.cy - a.cy;
+            var dist2 = dx * dx + dy * dy;
+            var minDist = (a.baseRadius + b.baseRadius) * 0.72;
+
+            if (dist2 < 0.0001 || dist2 >= minDist * minDist) continue;
+
+            var dist = Math.sqrt(dist2);
+            var push = (minDist - dist) * 0.025;
+            var nx = dx / dist;
+            var ny = dy / dist;
+
+            a.velocityX -= nx * push;
+            a.velocityY -= ny * push;
+            b.velocityX += nx * push;
+            b.velocityY += ny * push;
+        }
+    }
+}
+
+function updateMovement(o) {
+    var drive = 0.045 + o.energy * 0.055;
+
+    o.velocityX = o.velocityX * 0.78 + o.polarityX * drive;
+    o.velocityY = o.velocityY * 0.78 + o.polarityY * drive;
+
+    o.prevCx = o.cx;
+    o.prevCy = o.cy;
+
+    o.cx += o.velocityX;
+    o.cy += o.velocityY;
+
+    var margin = o.baseRadius + 3;
+
+    if (o.cx < margin) {
+        o.cx = margin;
+        o.velocityX = Math.abs(o.velocityX) * 0.65;
+        o.polarityX = Math.abs(o.polarityX);
+    } else if (o.cx > WIDTH - margin) {
+        o.cx = WIDTH - margin;
+        o.velocityX = -Math.abs(o.velocityX) * 0.65;
+        o.polarityX = -Math.abs(o.polarityX);
+    }
+
+    if (o.cy < margin) {
+        o.cy = margin;
+        o.velocityY = Math.abs(o.velocityY) * 0.65;
+        o.polarityY = Math.abs(o.polarityY);
+    } else if (o.cy > HEIGHT - margin) {
+        o.cy = HEIGHT - margin;
+        o.velocityY = -Math.abs(o.velocityY) * 0.65;
+        o.polarityY = -Math.abs(o.polarityY);
+    }
+}
+
+function updateNucleus(o) {
+    var targetX = o.cx - o.polarityX * o.baseRadius * 0.12;
+    var targetY = o.cy - o.polarityY * o.baseRadius * 0.12;
+
+    o.nucleusVX = o.nucleusVX * 0.72 + (targetX - o.nucleusX) * 0.055;
+    o.nucleusVY = o.nucleusVY * 0.72 + (targetY - o.nucleusY) * 0.055;
+
+    o.nucleusX += o.nucleusVX;
+    o.nucleusY += o.nucleusVY;
+}
+
+function updateShape(o) {
+    var next = new Array(CONTOUR_POINTS);
+    var i;
+    var frameChange = 0;
+
+    o.shapePhase += 0.018 + o.energy * 0.015;
+    o.shapePhase2 += 0.011 + mutationAmount * 0.02;
+
+    for (i = 0; i < CONTOUR_POINTS; i++) {
+        var angle = Math.PI * 2 * i / CONTOUR_POINTS;
+        var dirX = Math.cos(angle);
+        var dirY = Math.sin(angle);
+        var front = dirX * o.polarityX + dirY * o.polarityY;
+
+        var harmonic =
+            Math.sin(angle * 3 + o.shapePhase) * 0.065 +
+            Math.sin(angle * 5 - o.shapePhase2) * 0.038;
+
+        var polarityBulge =
+            Math.max(0, front) * 0.11 -
+            Math.max(0, -front) * 0.045;
+
+        var desired =
+            o.targetRadius *
+            (1.0 + harmonic + polarityBulge);
+
+        var prev = o.radii[(i - 1 + CONTOUR_POINTS) % CONTOUR_POINTS];
+        var current = o.radii[i];
+        var following = o.radii[(i + 1) % CONTOUR_POINTS];
+        var neighbourAverage = (prev + current + following) / 3.0;
+
+        var noise =
+            (Math.random() - 0.5) *
+            mutationAmount *
+            o.targetRadius *
+            0.045;
+
+        var value =
+            current * 0.54 +
+            desired * 0.30 +
+            neighbourAverage * 0.16 +
+            noise;
+
+        value = clamp(
+            value,
+            o.targetRadius * 0.76,
+            o.targetRadius * 1.30
+        );
+
+        next[i] = value;
+        frameChange += Math.abs(value - current);
+    }
+
+    o.radii = next;
+    o.baseRadius = o.baseRadius * 0.90 + o.targetRadius * 0.10;
+
+    var contourVariation = 0;
+    for (i = 0; i < CONTOUR_POINTS; i++) {
+        contourVariation += Math.abs(
+            next[i] - next[(i - 1 + CONTOUR_POINTS) % CONTOUR_POINTS]
+        );
+    }
+
+    o.roughness = clamp(
+        contourVariation / (CONTOUR_POINTS * Math.max(1, o.baseRadius)) * 3.2 +
+        frameChange / (CONTOUR_POINTS * Math.max(1, o.baseRadius)) * 1.8,
+        0,
+        1
+    );
+}
+
+function polygonPoints(o) {
+    var points = new Array(CONTOUR_POINTS);
+    var i;
+
+    for (i = 0; i < CONTOUR_POINTS; i++) {
+        var angle = Math.PI * 2 * i / CONTOUR_POINTS;
+        points[i] = [
+            o.cx + Math.cos(angle) * o.radii[i],
+            o.cy + Math.sin(angle) * o.radii[i]
+        ];
+    }
+
+    return points;
+}
+
+function polygonArea(points) {
+    var sum = 0;
+    var i;
+
+    for (i = 0; i < points.length; i++) {
+        var a = points[i];
+        var b = points[(i + 1) % points.length];
+        sum += a[0] * b[1] - b[0] * a[1];
+    }
+
+    return Math.abs(sum) * 0.5;
 }
 
 function stepOrganism(o) {
-    if (!o.cells.length) return;
     o.event = 0;
     o.age++;
-    updatePolarity(o);
+
+    if (generation % 2 === 0) updatePolarity(o);
+
     consumeFood(o);
+    updateMovement(o);
+    updateShape(o);
+    updateNucleus(o);
 
-    var sizeError = o.targetArea - o.cells.length;
-    var attempts = 3 + Math.floor(Math.abs(sizeError) / 20) + Math.floor(o.energy * 4);
-    attempts = clamp(attempts, 2, 12);
-    var a;
+    o.energy = clamp(
+        o.energy -
+        metabolism -
+        o.baseRadius * 0.000013 -
+        (Math.abs(o.velocityX) + Math.abs(o.velocityY)) * 0.00025,
+        0,
+        1
+    );
 
-    for (a = 0; a < attempts; a++) {
-        var shouldGrow = sizeError > 0 || Math.random() < 0.54;
-        if (shouldGrow) {
-            var fi = chooseBoundary(o, true);
-            if (fi >= 0) {
-                var fc = o.cells[fi];
-                var dx = Math.round(o.polarityX * (0.7 + Math.random()) + (Math.random() - 0.5) * 1.7);
-                var dy = Math.round(o.polarityY * (0.7 + Math.random()) + (Math.random() - 0.5) * 1.7);
-                if (dx === 0 && dy === 0) dx = Math.random() < 0.5 ? -1 : 1;
-                var nx = clamp(fc[0] + dx, 1, WIDTH - 2);
-                var ny = clamp(fc[1] + dy, 1, HEIGHT - 2);
-                addCell(o, nx, ny);
-            }
-        }
-
-        var shouldRetract = o.cells.length > o.targetArea || Math.random() < 0.46;
-        if (shouldRetract && o.cells.length > MIN_AREA) {
-            var ri = chooseBoundary(o, false);
-            if (ri >= 0 && connectedEnough(o, ri)) removeCell(o, ri);
-        }
-    }
-
-    o.energy = clamp(o.energy - metabolism - o.cells.length * 0.0000016, 0, 1);
-    if (o.energy < 0.12 && o.cells.length > MIN_AREA) {
-        var shrink = chooseBoundary(o, false);
-        if (shrink >= 0 && connectedEnough(o, shrink)) removeCell(o, shrink);
-    }
-    updateStats(o);
+    o.area = polygonArea(polygonPoints(o));
 }
 
 function divideOrganism(o) {
-    if (organisms.length >= MAX_ORGANISMS || o.cells.length < DIVIDE_AREA || o.energy < 0.82 || o.age < 420) return false;
-
-    var axisX = -o.polarityY;
-    var axisY = o.polarityX;
-    var groupA = [];
-    var groupB = [];
-    var i;
-    for (i = 0; i < o.cells.length; i++) {
-        var c = o.cells[i];
-        var side = (c[0] - o.cx) * axisX + (c[1] - o.cy) * axisY;
-        if (side < 0) groupA.push(c); else groupB.push(c);
+    if (
+        organisms.length >= MAX_ORGANISMS ||
+        o.energy < 0.91 ||
+        o.baseRadius < 10.4 ||
+        o.age < 520
+    ) {
+        return false;
     }
-    if (groupA.length < MIN_AREA || groupB.length < MIN_AREA) return false;
 
-    var newO = {
-        id: nextId++,
-        slot: freeSlot(),
-        cells: [],
-        cx: o.cx,
-        cy: o.cy,
-        prevCx: o.cx,
-        prevCy: o.cy,
-        polarityX: -o.polarityY + (Math.random() - 0.5) * 0.4,
-        polarityY: o.polarityX + (Math.random() - 0.5) * 0.4,
-        energy: o.energy * 0.48,
-        age: 0,
-        roughness: 0,
-        event: 2,
-        targetArea: Math.max(90, o.targetArea * 0.56),
-        color: palette[(nextId - 2) % palette.length]
-    };
+    var perpendicularX = -o.polarityY;
+    var perpendicularY = o.polarityX;
+    var offset = o.baseRadius * 0.48;
+    var childRadius = Math.max(5.8, o.baseRadius * 0.73);
 
-    o.cells = groupA;
-    newO.cells = groupB;
-    for (i = 0; i < newO.cells.length; i++) grid[indexOf(newO.cells[i][0], newO.cells[i][1])] = newO.id;
+    var child = spawnOrganism(
+        o.cx + perpendicularX * offset,
+        o.cy + perpendicularY * offset,
+        childRadius,
+        o.energy * 0.46
+    );
+
+    if (!child) return false;
+
+    child.polarityX = perpendicularX;
+    child.polarityY = perpendicularY;
+    child.event = 2;
+
+    o.cx -= perpendicularX * offset;
+    o.cy -= perpendicularY * offset;
     o.energy *= 0.52;
-    o.targetArea *= 0.56;
+    o.targetRadius = childRadius;
+    o.baseRadius = childRadius;
+    o.radii = makeInitialRadii(childRadius, o.shapePhase, o.id);
     o.age = 0;
     o.event = 2;
-    updateStats(o);
-    updateStats(newO);
-    organisms.push(newO);
+
     totalBirths++;
     return true;
 }
@@ -390,115 +613,304 @@ function divideOrganism(o) {
 function killOrganism(index) {
     var o = organisms[index];
     var i;
-    for (i = 0; i < o.cells.length; i++) {
-        var c = o.cells[i];
-        var idx = indexOf(c[0], c[1]);
-        grid[idx] = 0;
-        food[idx] = clamp(food[idx] + 0.18, 0, 1);
+
+    for (i = 0; i < 14; i++) {
+        var angle = Math.PI * 2 * i / 14;
+        var radius = o.baseRadius * (0.15 + Math.random() * 0.75);
+
+        var wx = o.cx + Math.cos(angle) * radius;
+        var wy = o.cy + Math.sin(angle) * radius;
+
+        var fx = clamp(Math.floor(wx * FOOD_W / WIDTH), 0, FOOD_W - 1);
+        var fy = clamp(Math.floor(wy * FOOD_H / HEIGHT), 0, FOOD_H - 1);
+        var idx = foodIndex(fx, fy);
+
+        food[idx] = clamp(food[idx] + 0.22, 0, 1);
     }
-    outlet(1, ["voice", o.slot, 0, 0, 0, 0, o.cx / WIDTH, o.cy / HEIGHT, 3]);
+
+    outlet(1, [
+        "voice",
+        o.slot,
+        0, 0, 0, 0,
+        o.cx / WIDTH,
+        o.cy / HEIGHT,
+        3
+    ]);
+
     organisms.splice(index, 1);
     totalDeaths++;
 }
 
 function diffuseFood() {
-    var x, y;
-    for (y = 0; y < HEIGHT; y++) {
-        for (x = 0; x < WIDTH; x++) {
-            var idx = indexOf(x, y);
+    var x;
+    var y;
+
+    for (y = 0; y < FOOD_H; y++) {
+        for (x = 0; x < FOOD_W; x++) {
+            var idx = foodIndex(x, y);
             var center = food[idx];
-            var left = food[indexOf(x > 0 ? x - 1 : x, y)];
-            var right = food[indexOf(x < WIDTH - 1 ? x + 1 : x, y)];
-            var up = food[indexOf(x, y > 0 ? y - 1 : y)];
-            var down = food[indexOf(x, y < HEIGHT - 1 ? y + 1 : y)];
+
+            var left = food[foodIndex(x > 0 ? x - 1 : x, y)];
+            var right = food[foodIndex(x < FOOD_W - 1 ? x + 1 : x, y)];
+            var up = food[foodIndex(x, y > 0 ? y - 1 : y)];
+            var down = food[foodIndex(x, y < FOOD_H - 1 ? y + 1 : y)];
+
             var lap = (left + right + up + down) * 0.25 - center;
-            foodBuffer[idx] = clamp(center + lap * diffusion - center * 0.0018, 0, 1);
+
+            foodBuffer[idx] = clamp(
+                center + lap * diffusion - center * 0.0022,
+                0,
+                1
+            );
         }
     }
-    var tmp = food;
+
+    var temp = food;
     food = foodBuffer;
-    foodBuffer = tmp;
+    foodBuffer = temp;
 }
 
 function bang() {
     var i;
-    if (Math.random() < foodRate) seedFood(1);
-    if (generation % 2 === 0) diffuseFood();
 
-    for (i = 0; i < organisms.length; i++) stepOrganism(organisms[i]);
-    for (i = 0; i < organisms.length; i++) divideOrganism(organisms[i]);
-    for (i = organisms.length - 1; i >= 0; i--) {
-        if (organisms[i].energy <= 0.008 || organisms[i].cells.length < 18) killOrganism(i);
+    if (Math.random() < foodRate) seedFood(1);
+    if (generation % diffusionEvery === 0) diffuseFood();
+
+    repelOrganisms();
+
+    for (i = 0; i < organisms.length; i++) {
+        stepOrganism(organisms[i]);
     }
-    if (!organisms.length) spawnOrganism(WIDTH * 0.5, HEIGHT * 0.5, 6, 0.8);
+
+    for (i = 0; i < organisms.length; i++) {
+        divideOrganism(organisms[i]);
+    }
+
+    for (i = organisms.length - 1; i >= 0; i--) {
+        if (organisms[i].energy <= 0.01 || organisms[i].baseRadius < 4.8) {
+            killOrganism(i);
+        }
+    }
+
+    if (!organisms.length) {
+        spawnOrganism(WIDTH * 0.5, HEIGHT * 0.5, 7.5, 0.78);
+    }
 
     generation++;
-    render();
-    outputState();
+
+    if (generation % renderEvery === 0) render();
+    if (generation % outputEvery === 0) outputState(false);
+}
+
+function drawFood() {
+    var x;
+    var y;
+    var scaleX = WIDTH / FOOD_W;
+    var scaleY = HEIGHT / FOOD_H;
+
+    for (y = 0; y < FOOD_H; y++) {
+        for (x = 0; x < FOOD_W; x++) {
+            var value = food[foodIndex(x, y)];
+            if (value < 0.045) continue;
+
+            var worldX = Math.floor((x + 0.5) * scaleX);
+            var worldY = Math.floor((y + 0.5) * scaleY);
+            var brightness = Math.floor(clamp(value, 0, 1) * 170);
+
+            frame.setcell2d(
+                worldX,
+                worldY,
+                42 + brightness,
+                28 + Math.floor(brightness * 0.62),
+                14 + Math.floor(brightness * 0.18),
+                255
+            );
+        }
+    }
+}
+
+function fillPolygon(points, color) {
+    var minY = HEIGHT - 1;
+    var maxY = 0;
+    var i;
+
+    for (i = 0; i < points.length; i++) {
+        minY = Math.min(minY, Math.floor(points[i][1]));
+        maxY = Math.max(maxY, Math.ceil(points[i][1]));
+    }
+
+    minY = clamp(minY, 0, HEIGHT - 1);
+    maxY = clamp(maxY, 0, HEIGHT - 1);
+
+    var y;
+
+    for (y = minY; y <= maxY; y++) {
+        var scanY = y + 0.5;
+        var intersections = [];
+
+        for (i = 0; i < points.length; i++) {
+            var a = points[i];
+            var b = points[(i + 1) % points.length];
+
+            if (
+                (a[1] <= scanY && b[1] > scanY) ||
+                (b[1] <= scanY && a[1] > scanY)
+            ) {
+                var t = (scanY - a[1]) / (b[1] - a[1]);
+                intersections.push(a[0] + t * (b[0] - a[0]));
+            }
+        }
+
+        intersections.sort(function(a, b) { return a - b; });
+
+        for (i = 0; i + 1 < intersections.length; i += 2) {
+            var startX = clamp(Math.ceil(intersections[i]), 0, WIDTH - 1);
+            var endX = clamp(Math.floor(intersections[i + 1]), 0, WIDTH - 1);
+            var x;
+
+            for (x = startX; x <= endX; x++) {
+                frame.setcell2d(x, y, color[0], color[1], color[2], 255);
+            }
+        }
+    }
+}
+
+function drawLine(x0, y0, x1, y1, color) {
+    x0 = Math.round(x0);
+    y0 = Math.round(y0);
+    x1 = Math.round(x1);
+    y1 = Math.round(y1);
+
+    var dx = Math.abs(x1 - x0);
+    var sx = x0 < x1 ? 1 : -1;
+    var dy = -Math.abs(y1 - y0);
+    var sy = y0 < y1 ? 1 : -1;
+    var err = dx + dy;
+
+    while (true) {
+        if (x0 >= 0 && y0 >= 0 && x0 < WIDTH && y0 < HEIGHT) {
+            frame.setcell2d(x0, y0, color[0], color[1], color[2], 255);
+        }
+
+        if (x0 === x1 && y0 === y1) break;
+
+        var e2 = 2 * err;
+        if (e2 >= dy) {
+            err += dy;
+            x0 += sx;
+        }
+        if (e2 <= dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+function drawDisc(cx, cy, radius, color) {
+    var x;
+    var y;
+
+    cx = Math.round(cx);
+    cy = Math.round(cy);
+
+    for (y = -radius; y <= radius; y++) {
+        for (x = -radius; x <= radius; x++) {
+            if (x * x + y * y > radius * radius) continue;
+
+            var px = cx + x;
+            var py = cy + y;
+
+            if (px < 0 || py < 0 || px >= WIDTH || py >= HEIGHT) continue;
+            frame.setcell2d(px, py, color[0], color[1], color[2], 255);
+        }
+    }
+}
+
+function renderOrganism(o) {
+    var points = polygonPoints(o);
+
+    var interiorScale = 0.42 + o.energy * 0.16;
+    var interiorColor = [
+        Math.floor(o.color[0] * interiorScale),
+        Math.floor(o.color[1] * interiorScale),
+        Math.floor(o.color[2] * interiorScale)
+    ];
+
+    fillPolygon(points, interiorColor);
+
+    var i;
+    for (i = 0; i < points.length; i++) {
+        drawLine(
+            points[i][0],
+            points[i][1],
+            points[(i + 1) % points.length][0],
+            points[(i + 1) % points.length][1],
+            o.color
+        );
+    }
+
+    drawDisc(o.nucleusX, o.nucleusY, 2, [244, 246, 238]);
+
+    drawDisc(
+        o.cx + o.polarityX * (o.baseRadius + 1.5),
+        o.cy + o.polarityY * (o.baseRadius + 1.5),
+        1,
+        [255, 80, 184]
+    );
 }
 
 function render() {
     frame.setall(9, 11, 14, 255);
-    var x, y;
-    for (y = 0; y < HEIGHT; y++) {
-        for (x = 0; x < WIDTH; x++) {
-            var f = food[indexOf(x, y)];
-            if (f > 0.025) {
-                frame.setcell2d(x, y,
-                    Math.floor(34 + f * 180),
-                    Math.floor(25 + f * 110),
-                    Math.floor(12 + f * 35), 255);
-            }
-        }
-    }
+
+    drawFood();
 
     var i;
     for (i = 0; i < organisms.length; i++) {
-        var o = organisms[i];
-        var j;
-        for (j = 0; j < o.cells.length; j++) {
-            var c = o.cells[j];
-            var boundary = isBoundary(o, c[0], c[1]);
-            var scale = boundary ? 1.0 : 0.48 + o.energy * 0.2;
-            frame.setcell2d(c[0], c[1],
-                Math.floor(o.color[0] * scale),
-                Math.floor(o.color[1] * scale),
-                Math.floor(o.color[2] * scale), 255);
-        }
-
-        var nx = clamp(Math.round(o.cx), 1, WIDTH - 2);
-        var ny = clamp(Math.round(o.cy), 1, HEIGHT - 2);
-        frame.setcell2d(nx, ny, 244, 246, 238, 255);
-        frame.setcell2d(nx + 1, ny, 244, 246, 238, 255);
-        frame.setcell2d(nx - 1, ny, 244, 246, 238, 255);
-        frame.setcell2d(nx, ny + 1, 244, 246, 238, 255);
-        frame.setcell2d(nx, ny - 1, 244, 246, 238, 255);
-
-        var px = clamp(Math.round(o.cx + o.polarityX * 7), 0, WIDTH - 1);
-        var py = clamp(Math.round(o.cy + o.polarityY * 7), 0, HEIGHT - 1);
-        frame.setcell2d(px, py, 255, 80, 184, 255);
+        renderOrganism(organisms[i]);
     }
+
     outlet(0, "jit_matrix", frame.name);
 }
 
-function outputState() {
+function outputState(force) {
     var i;
+
     var foodSum = 0;
-    for (i = 0; i < food.length; i += 12) foodSum += food[i];
-    var foodAverage = foodSum / Math.ceil(food.length / 12);
+    for (i = 0; i < food.length; i += 8) {
+        foodSum += food[i];
+    }
+    var foodAverage = foodSum / Math.ceil(food.length / 8);
 
     for (i = 0; i < organisms.length; i++) {
         var o = organisms[i];
-        var speed = Math.sqrt(distance2(o.cx, o.cy, o.prevCx, o.prevCy));
-        outlet(1, ["voice", o.slot,
-            clamp(o.cells.length / 260.0, 0, 1),
+
+        var speed = Math.sqrt(
+            distance2(o.cx, o.cy, o.prevCx, o.prevCy)
+        );
+
+        outlet(1, [
+            "voice",
+            o.slot,
+            clamp(o.area / 420.0, 0, 1),
             o.energy,
-            clamp(speed / 3.0, 0, 1),
-            clamp(o.roughness, 0, 1),
+            clamp(speed / 1.2, 0, 1),
+            clamp(o.roughness * 4.0, 0, 1),
             clamp(o.cx / WIDTH, 0, 1),
             clamp(o.cy / HEIGHT, 0, 1),
-            o.event]);
+            o.event
+        ]);
+
         o.event = 0;
     }
-    outlet(2, ["stats", generation, organisms.length, foodAverage, totalBirths, totalDeaths]);
+
+    if (force || generation % (outputEvery * 2) === 0) {
+        outlet(2, [
+            "stats",
+            generation,
+            organisms.length,
+            foodAverage,
+            totalBirths,
+            totalDeaths
+        ]);
+    }
 }
