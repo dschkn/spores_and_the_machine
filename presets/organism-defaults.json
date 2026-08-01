@@ -2,21 +2,32 @@
   "field": {
     "width": 160,
     "height": 90,
-    "step_ms": 90,
-    "organisms": 6
+    "step_ms": 120,
+    "organisms": 5,
+    "quality": "medium"
+  },
+  "simulation": {
+    "food_width": 80,
+    "food_height": 45,
+    "contour_points": 28,
+    "render_every_steps": 2,
+    "output_every_steps": 2,
+    "diffusion_every_steps": 4
   },
   "biology": {
-    "food_rate": 0.013,
-    "mutation": 0.18,
-    "metabolism": 0.00115,
-    "minimum_area": 55,
-    "division_area": 215,
+    "food_rate": 0.010,
+    "mutation": 0.12,
+    "metabolism": 0.001,
+    "minimum_radius": 5.8,
+    "division_radius": 10.4,
     "maximum_organisms": 8
   },
   "audio": {
-    "master": 0.45,
+    "master": 0.38,
     "voices": 8,
-    "frequency_min_hz": 55,
-    "frequency_max_hz": 12000
+    "frequency_min_hz": 70,
+    "frequency_max_hz": 11000,
+    "click_layers_per_voice": 2,
+    "sine_grains_per_voice": 1
   }
 }
