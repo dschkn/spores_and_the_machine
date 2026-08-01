@@ -340,6 +340,67 @@ function stepOrganism(o) {
     updateStats(o);
 }
 
+function divideOrganism(o) {
+    if (organisms.length >= MAX_ORGANISMS || o.cells.length < DIVIDE_AREA || o.energy < 0.82 || o.age < 420) return false;
+
+    var axisX = -o.polarityY;
+    var axisY = o.polarityX;
+    var groupA = [];
+    var groupB = [];
+    var i;
+    for (i = 0; i < o.cells.length; i++) {
+        var c = o.cells[i];
+        var side = (c[0] - o.cx) * axisX + (c[1] - o.cy) * axisY;
+        if (side < 0) groupA.push(c); else groupB.push(c);
+    }
+    if (groupA.length < MIN_AREA || groupB.length < MIN_AREA) return false;
+
+    var newO = {
+        id: nextId++,
+        slot: freeSlot(),
+        cells: [],
+        cx: o.cx,
+        cy: o.cy,
+        prevCx: o.cx,
+        prevCy: o.cy,
+        polarityX: -o.polarityY + (Math.random() - 0.5) * 0.4,
+        polarityY: o.polarityX + (Math.random() - 0.5) * 0.4,
+        energy: o.energy * 0.48,
+        age: 0,
+        roughness: 0,
+        event: 2,
+        targetArea: Math.max(90, o.targetArea * 0.56),
+        color: palette[(nextId - 2) % palette.length]
+    };
+
+    o.cells = groupA;
+    newO.cells = groupB;
+    for (i = 0; i < newO.cells.length; i++) grid[indexOf(newO.cells[i][0], newO.cells[i][1])] = newO.id;
+    o.energy *= 0.52;
+    o.targetArea *= 0.56;
+    o.age = 0;
+    o.event = 2;
+    updateStats(o);
+    updateStats(newO);
+    organisms.push(newO);
+    totalBirths++;
+    return true;
+}
+
+function killOrganism(index) {
+    var o = organisms[index];
+    var i;
+    for (i = 0; i < o.cells.length; i++) {
+        var c = o.cells[i];
+        var idx = indexOf(c[0], c[1]);
+        grid[idx] = 0;
+        food[idx] = clamp(food[idx] + 0.18, 0, 1);
+    }
+    outlet(1, ["voice", o.slot, 0, 0, 0, 0, o.cx / WIDTH, o.cy / HEIGHT, 3]);
+    organisms.splice(index, 1);
+    totalDeaths++;
+}
+
 function diffuseFood() {
     var x, y;
     for (y = 0; y < HEIGHT; y++) {
@@ -365,6 +426,11 @@ function bang() {
     if (generation % 2 === 0) diffuseFood();
 
     for (i = 0; i < organisms.length; i++) stepOrganism(organisms[i]);
+    for (i = 0; i < organisms.length; i++) divideOrganism(organisms[i]);
+    for (i = organisms.length - 1; i >= 0; i--) {
+        if (organisms[i].energy <= 0.008 || organisms[i].cells.length < 18) killOrganism(i);
+    }
+    if (!organisms.length) spawnOrganism(WIDTH * 0.5, HEIGHT * 0.5, 6, 0.8);
 
     generation++;
     render();
