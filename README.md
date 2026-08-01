@@ -1,95 +1,88 @@
 # Spores and the machine
 
-*A cellular automaton reconstructed and sonified anew in Max/MSP.*
-
-<p align="center">
-  <img src="images/interface-v05.svg" alt="Spores and the machine running in Max/MSP" width="100%">
-</p>
+*A multi-state cellular automaton reconstructed and sonified in Max/MSP.*
 
 ## About
 
-**Spores and the machine** is a Max/MSP study of cellular growth, decay, movement, and sound. The repository contains two related instruments:
+**Spores and the machine** is a compact Max/MSP instrument built around a large `matrixctrl` field, local cellular rules, and layered real-time sonification.
 
-- `spores-and-the-machine.maxpat` preserves the original Conway/mold reconstruction;
-- `spores-organisms.maxpat` develops the idea into soft-bodied organisms with membranes, nuclei, food, metabolism, division, death, and individual acoustic voices.
+The main instrument deliberately returns to a cellular automaton rather than attempting to imitate complete biological organisms. The field is still capable of producing large colonies, moving fronts, cavities, branching tissues, waves, and decay, but every visible form emerges from local interactions between cells.
 
-The project begins with [Conway's Game of Life](https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life), a zero-player cellular automaton devised by John Horton Conway in 1970. In the classical version, each location is either alive or dead and changes according to its eight neighbours. The rule is commonly written as **B3/S23**: birth with three neighbours, survival with two or three.
+The repository also retains the earlier contour-based organism experiment in `spores-organisms.maxpat`. It is no longer the main version.
 
-## Classic cellular mode
+## Cellular field
 
-The original patch extends Conway's rule with optional toroidal wrapping, rare spontaneous spores, automatic reinjection after prolonged inactivity, and a three-state `mold` mode:
+The main matrix is **120 × 60**, larger than the original 100 × 50 field while remaining practical inside Max.
 
-`empty → growing → exhausted → empty`
+A cell can occupy six states:
 
-Its matrix is divided into acoustic territories containing layered `click~` streams, resonant filters, and short `cycle~` grains.
+- `0` — empty;
+- `1` — spore;
+- `2` — young growth;
+- `3` — mature tissue;
+- `4` — stressed tissue;
+- `5` — decay.
 
-## Organism mode
+`matrixctrl` displays these states as different intensities of the active color.
 
-Open `spores-organisms.maxpat` for the advanced model.
+### Colony mode
 
-The visual field is **160 × 90**, but the organisms are no longer assembled by independently adding and deleting grid pixels. Each body is generated from one closed radial contour and filled as a continuous polygon.
+`mode colony` is the default. Randomization creates groups rather than independent points. Each group begins as a small irregular body with a young outer region and a mature interior.
 
-This refactor solves two problems at once:
+Local rules then control:
 
-- the membrane remains closed, so organisms cannot disintegrate into disconnected islands;
-- the engine calculates dozens of contour points instead of repeatedly scanning hundreds of occupied pixels.
+- germination;
+- growth;
+- maturation;
+- stress;
+- recovery;
+- overcrowding;
+- isolation;
+- decay;
+- directional budding.
 
-Colors indicate different functions:
+A slowly moving mathematical flow field biases some births. The result is not literal cell movement: the colony changes by growing at some edges and disappearing at others.
 
-- bright organism color: membrane;
-- darker organism color: cytoplasm;
-- pale center: nucleus;
-- magenta point: movement polarity;
-- amber field: nutrients.
+### Excitable mode
 
-Each organism:
+`mode excitable` produces propagating fronts. Cells pass through the sequence:
 
-- senses nearby nutrients and develops a movement direction;
-- expands slightly at the front and contracts at the rear;
-- changes shape through smoothed radial harmonics;
-- moves with a continuous membrane;
-- carries a nucleus with its own inertia;
-- consumes food and spends energy;
-- can divide into two organisms;
-- releases nutrients when it dies.
+`spore → young → mature → stressed → decay → empty`
 
-This is an artistic soft-body model, not a medical or molecular simulation.
+New spores appear near suitable active neighbours, producing waves, rings, collisions, and broken fronts.
 
-## Performance refactor
+### Conway mode
 
-The nutrient field is simulated internally at **80 × 45**, then sampled into the larger display. Visual rendering, audio control output, and nutrient diffusion run at separate rates.
+`mode conway` keeps the classical B3/S23 Game of Life behaviour. The project begins historically with [Conway's Game of Life](https://en.wikipedia.org/wiki/Conway%27s_Game_of_Life), but the default colony mode extends the field into a multi-state system.
 
-The patch now uses `qmetro`, so drawing work may be deferred when Max is busy with audio instead of freezing the interface.
+## Sonification
 
-Three modes are available directly in Presentation Mode:
+The matrix is divided into **six acoustic regions** arranged as three columns by two rows.
 
-- `quality low`: 20 contour points, rendering every three steps;
-- `quality medium`: 28 contour points, rendering every two steps;
-- `quality high`: 36 contour points, rendering every step.
+Each region controls one `field.voice.maxpat` instance containing:
 
-`quality medium` is the default. For the lightest operation use `quality low`, five organisms, and a step of 140–180 ms.
+- two independent irregular `click~` streams;
+- resonant filters tuned from the region's vertical position;
+- a filtered noise layer for rustle and particulate motion;
+- sparse short `cycle~` grains;
+- a very quiet sinusoidal filament associated with mature tissue;
+- separate transient accents for births and deaths.
 
-## Organism sonification
-
-Up to eight organisms can receive independent stereo voices. Five are created by default.
-
-Each voice now uses a lighter structure:
-
-- two irregular resonant `click~` streams;
-- one short `cycle~` grain layer;
-- one event accent for feeding, division, and death.
+A seventh global layer, `weather.voice.maxpat`, listens to the whole matrix and adds broad rustle, high sine dust, and system-wide event accents.
 
 Mappings:
 
-- vertical position → spectral register, approximately 70 Hz to 11 kHz;
-- horizontal position → stereo placement;
-- polygon area → sonic mass;
-- movement speed → click density;
-- contour variation → resonance and irregularity;
-- energy → loudness;
-- feeding, division, and death → transient accents.
+- vertical position → spectral register, roughly 45 Hz to 12 kHz;
+- horizontal position → stereo position;
+- local density → loudness and click probability;
+- local activity → event rate;
+- young tissue → brittle impulses and sine grains;
+- mature tissue → tonal continuity;
+- stress and decay → filtered noise;
+- boundary proportion → resonance and spectral spread;
+- births and deaths → accent impulses.
 
-One organism therefore has one body and one audible identity. Humanity has finally granted administrative unity to an amoeba.
+The purpose is not to assign one oscillator to every point. The automaton is analysed regionally so the sound can remain layered without turning the computer into a very expensive radiator.
 
 ## Requirements
 
@@ -97,36 +90,61 @@ One organism therefore has one body and one audible identity. Humanity has final
 - no external packages;
 - a working audio output selected in Max.
 
-## Running organism mode
+## How to run
 
 1. Download or clone the repository.
-2. Keep `spores-organisms.maxpat`, `organism-engine.js`, and `organism.voice.maxpat` in the same folder.
-3. Open `spores-organisms.maxpat`. It opens in Presentation Mode.
-4. Enable the loudspeaker button.
-5. Leave `quality medium` selected for the first run.
+2. Keep these files in the same folder:
+   - `spores-and-the-machine.maxpat`
+   - `spores-and-the-machine.js`
+   - `field.voice.maxpat`
+   - `weather.voice.maxpat`
+3. Open `spores-and-the-machine.maxpat`.
+4. Click **TEST TONE** and confirm that the meters move.
+5. Enable the loudspeaker button.
 6. Turn on **RUN**.
-7. Use `reset 5` for the default population or `reset 8` for the maximum population.
-8. Use `addfood 10` to add nutrient clusters.
-9. Adjust **FOOD**, **MUTATION**, **STEP (MS)**, and **MASTER**.
+7. Use **NEW FIELD** to generate a new set of colonies.
+8. Switch between `mode colony`, `mode excitable`, and `mode conway`.
 
-Recommended starting values:
+Recommended initial values:
 
-- `STEP (MS)`: `120`;
-- `FOOD`: `0.010`;
-- `MUTATION`: `0.12`;
-- `MASTER`: `0.38`.
+- `STEP (MS)`: `95`;
+- `COLONIES`: `18`;
+- `SPORE RATE`: `0.00008`;
+- `DRIFT`: `0.55`;
+- `MASTER`: `0.62`.
+
+## Controls
+
+- **RUN** starts and stops the cellular clock;
+- **STEP (MS)** changes simulation speed;
+- **NEW FIELD** regenerates the field using the displayed colony count;
+- `cleargrid` clears the automaton;
+- `inject 2` inserts two small active colonies;
+- `mode colony` selects the six-state colony rule;
+- `mode excitable` selects the propagating wave rule;
+- `mode conway` selects B3/S23;
+- `wrap 1` connects opposite edges of the matrix;
+- **SPORE RATE** controls rare spontaneous births;
+- **DRIFT** controls directional bias in colony growth;
+- **MASTER** controls output amplitude.
+
+The matrix can also be edited directly with the mouse while the clock is stopped.
+
+## Performance
+
+The engine uses flat one-dimensional arrays and updates only changed `matrixctrl` cells. Regional sound statistics are collected during the same simulation pass, avoiding another full scan after every generation.
+
+The default 95 ms step is intentionally moderate. Increase it to 120–160 ms if the Max scheduler becomes busy.
 
 ## Files
 
-- `spores-and-the-machine.maxpat` — classic Conway/mold instrument;
-- `spores-and-the-machine.js` — classic automaton engine;
-- `spore.voice.maxpat` — classic territory voice;
-- `spores-organisms.maxpat` — optimized organism interface;
-- `organism-engine.js` — contour bodies, nutrient field, lifecycle, and rendering;
-- `organism.voice.maxpat` — one lightweight organism voice;
-- `presets/organism-defaults.json` — default performance and biology values;
-- `docs/ORGANISM_MODEL.md` — biological behaviour and mappings;
-- `docs/PERFORMANCE_REFACTOR.md` — performance architecture and quality modes.
+- `spores-and-the-machine.maxpat` — main Presentation Mode instrument;
+- `spores-and-the-machine.js` — multi-state cellular engine and regional analysis;
+- `field.voice.maxpat` — one regional click, rustle, and sine voice;
+- `weather.voice.maxpat` — global environmental sound layer;
+- `presets/cellular-defaults.json` — recommended starting values;
+- `docs/MULTISTATE_AUTOMATON.md` — algorithm and mapping notes;
+- `spores-organisms.maxpat` — retained experimental organism version.
 
 Created by Dmitrii Shchukin.  
 (c) 2026 Dmitrii Shchukin.
